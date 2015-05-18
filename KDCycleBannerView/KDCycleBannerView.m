@@ -22,6 +22,8 @@
 
 @property (strong, nonatomic) CompleteBlock completeBlock;
 
+@property (nonatomic, strong) NSArray *imageViews;
+
 @end
 
 @implementation KDCycleBannerView
@@ -95,6 +97,7 @@ static void *kContentImageViewObservationContext = &kContentImageViewObservation
     _pageControl.center = CGPointMake(CGRectGetWidth(_scrollView.frame)*0.5, CGRectGetHeight(_scrollView.frame) - 12.);
     _pageControl.userInteractionEnabled = NO;
     [self addSubview:_pageControl];
+    _pageControl.hidden = YES;
 }
 
 - (void)loadData {
@@ -128,35 +131,20 @@ static void *kContentImageViewObservationContext = &kContentImageViewObservation
     
     _scrollView.contentSize = CGSizeMake(contentWidth * _datasourceImages.count, contentHeight);
     
+    NSMutableArray *mutableArray = [NSMutableArray new];
     for (NSInteger i = 0; i < _datasourceImages.count; i++) {
         CGRect imgRect = CGRectMake(contentWidth * i, 0, contentWidth, contentHeight);
         UIImageView *imageView = [[UIImageView alloc] initWithFrame:imgRect];
         imageView.backgroundColor = [UIColor clearColor];
         imageView.contentMode = [_datasource contentModeForImageIndex:i];
         
-        id imageSource = [_datasourceImages objectAtIndex:i];
-        if ([imageSource isKindOfClass:[UIImage class]]) {
-            imageView.image = imageSource;
-        }else if ([imageSource isKindOfClass:[NSString class]] || [imageSource isKindOfClass:[NSURL class]]) {
-            UIActivityIndicatorView *activityIndicatorView = [UIActivityIndicatorView new];
-            activityIndicatorView.center = CGPointMake(CGRectGetWidth(_scrollView.frame) * 0.5, CGRectGetHeight(_scrollView.frame) * 0.5);
-            activityIndicatorView.tag = 100;
-            activityIndicatorView.activityIndicatorViewStyle = UIActivityIndicatorViewStyleWhiteLarge;
-            [activityIndicatorView startAnimating];
-            [imageView addSubview:activityIndicatorView];
-            [imageView addObserver:self forKeyPath:@"image" options:NSKeyValueObservingOptionNew|NSKeyValueObservingOptionOld context:kContentImageViewObservationContext];
-            
-            if ([self.datasource respondsToSelector:@selector(placeHolderImageOfBannerView:atIndex:)]) {
-                UIImage *placeHolderImage = [self.datasource placeHolderImageOfBannerView:self atIndex:i];
-                NSAssert(placeHolderImage != nil, @"placeHolderImage must not be nil");
-                [imageView sd_setImageWithURL:[imageSource isKindOfClass:[NSString class]] ? [NSURL URLWithString:imageSource] : imageSource placeholderImage:placeHolderImage];
-            }else {
-                [imageView sd_setImageWithURL:[imageSource isKindOfClass:[NSString class]] ? [NSURL URLWithString:imageSource] : imageSource];
-            }
-            
-        }
         [_scrollView addSubview:imageView];
+        [mutableArray addObject:imageView];
     }
+    
+    self.imageViews = [mutableArray copy];
+    //只加载第一个
+    [self loadDataAtIndex:0];
     
     if (self.isContinuous && _datasourceImages.count > 1) {
         _scrollView.contentOffset = CGPointMake(CGRectGetWidth(_scrollView.frame), 0);
@@ -168,6 +156,32 @@ static void *kContentImageViewObservationContext = &kContentImageViewObservation
     tapGestureRecognize.numberOfTapsRequired = 1;
     [_scrollView addGestureRecognizer:tapGestureRecognize];
     
+}
+
+- (void)loadDataAtIndex:(NSUInteger)index {
+    id imageSource = [_datasourceImages objectAtIndex:index];
+    UIImageView *imageView = (UIImageView*)_imageViews[index];
+    
+    if ([imageSource isKindOfClass:[UIImage class]]) {
+        imageView.image = imageSource;
+    }else if ([imageSource isKindOfClass:[NSString class]] || [imageSource isKindOfClass:[NSURL class]]) {
+        UIActivityIndicatorView *activityIndicatorView = [UIActivityIndicatorView new];
+        activityIndicatorView.center = CGPointMake(CGRectGetWidth(_scrollView.frame) * 0.5, CGRectGetHeight(_scrollView.frame) * 0.5);
+        activityIndicatorView.tag = 100;
+        activityIndicatorView.activityIndicatorViewStyle = UIActivityIndicatorViewStyleWhiteLarge;
+        [activityIndicatorView startAnimating];
+        [imageView addSubview:activityIndicatorView];
+        [imageView addObserver:self forKeyPath:@"image" options:NSKeyValueObservingOptionNew|NSKeyValueObservingOptionOld context:kContentImageViewObservationContext];
+        
+        if ([self.datasource respondsToSelector:@selector(placeHolderImageOfBannerView:atIndex:)]) {
+            UIImage *placeHolderImage = [self.datasource placeHolderImageOfBannerView:self atIndex:index];
+            NSAssert(placeHolderImage != nil, @"placeHolderImage must not be nil");
+            [imageView sd_setImageWithURL:[imageSource isKindOfClass:[NSString class]] ? [NSURL URLWithString:imageSource] : imageSource placeholderImage:placeHolderImage];
+        }else {
+            [imageView sd_setImageWithURL:[imageSource isKindOfClass:[NSString class]] ? [NSURL URLWithString:imageSource] : imageSource];
+        }
+        
+    }
 }
 
 - (void)reloadDataWithCompleteBlock:(CompleteBlock)competeBlock {
@@ -252,6 +266,9 @@ static void *kContentImageViewObservationContext = &kContentImageViewObservation
     }
     
     NSInteger page = (scrollView.contentOffset.x + item_width * 0.5) / item_width;
+    if( page > _datasourceImages.count - 1) {
+        page = _datasourceImages.count - 1;
+    }
     
     if (self.isContinuous && _datasourceImages.count > 1) {
         page--;
@@ -264,23 +281,26 @@ static void *kContentImageViewObservationContext = &kContentImageViewObservation
     
     _currentSelectedPage = page;
     
-    if (page != _pageControl.currentPage) {
+    NSUInteger oldPage = _pageControl.currentPage;
+    _pageControl.currentPage = page;
+    if (page != oldPage) {
+        [self loadDataAtIndex:page];
+
         if ([self.delegate respondsToSelector:@selector(cycleBannerView:didScrollToIndex:)]) {
             [self.delegate cycleBannerView:self didScrollToIndex:page];
         }
     }
     
-    _pageControl.currentPage = page;
 }
 
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView
 {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(autoSwitchBannerView) object:nil];
+    //[NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(autoSwitchBannerView) object:nil];
 }
 
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView
 {
-    [self performSelector:@selector(autoSwitchBannerView) withObject:nil afterDelay:self.autoPlayTimeInterval];
+    //[self performSelector:@selector(autoSwitchBannerView) withObject:nil afterDelay:self.autoPlayTimeInterval];
 }
 
 #pragma mark - UIGestureRecognizerDelegate
